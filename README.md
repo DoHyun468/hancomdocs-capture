@@ -81,7 +81,6 @@ node hancom.js around --name report.hwp --text "지원대상"
 - [`SKILL.md`](SKILL.md) — Claude Code 스킬 정의 (트리거 · 온보딩 · 명령)
 - [`ORDER_SPEC.txt`](ORDER_SPEC.txt) — 에이전트 주문(명령) 명세
 - [`DEBUG_NOTES.md`](DEBUG_NOTES.md) — 개발 노트 (접근법, webhwp 내부 발견, 안전 교훈, 실패 모드)
-- [`GARBAGE_REPRO.md`](GARBAGE_REPRO.md) — '조용한 garbage 렌더'(모드 ②) 재현 과정 (디버그팀용)
 
 ## 라이선스
 
