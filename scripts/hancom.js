@@ -38,8 +38,9 @@ const log = (...x) => console.log(...x);
 const out = (o) => log('RESULT_JSON=' + JSON.stringify(o));
 
 async function ensureLoggedIn(page, url) {
-  await page.goto(url, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1500);
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  // 리다이렉트가 마무리될 짧은 여유만 (networkidle 대신 domcontentloaded + 0.8s)
+  await page.waitForTimeout(800);
   if (page.url().includes('accounts.hancom.com') || page.url().includes('/login')) {
     throw new Error('AUTH_EXPIRED — node login2.js 로 재로그인 필요');
   }
@@ -56,6 +57,8 @@ async function setScroll(ed, top) {
 
 // N페이지로 비례 점프 (총페이지 불필요)
 async function gotoPage(ed, n, pageH = PAGE_H) {
+  // page 1은 이미 맨 위 → 페이지네이션 강제(끝까지 스크롤) 생략해서 비용 절감
+  if (n <= 1) { await setScroll(ed, 0); await ed.waitForTimeout(500); return { estTotal: null, pageH, scrollTop: 0 }; }
   await setScroll(ed, 9_999_999); await ed.waitForTimeout(2000);
   const s = await setScroll(ed, 9_999_999); await ed.waitForTimeout(800);
   const maxTop = s ? s.scrollHeight : n * pageH;
@@ -146,20 +149,39 @@ async function hideOverlays(ed) {
 
 async function openDoc(ctx, page, name) {
   await ensureLoggedIn(page, MYDRIVE);
-  await page.waitForTimeout(1500);
   const row = page.getByText(name, { exact: false }).first();
-  if (!(await row.count())) return null;
+  // 고정 대기 대신 행이 뜰 때까지만 (없으면 null → 업로드 경로)
+  try { await row.waitFor({ timeout: 6000 }); } catch { return null; }
   const [editor] = await Promise.all([
     ctx.waitForEvent('page', { timeout: 12000 }),
     row.dblclick(),
   ]);
   await editor.waitForLoadState('networkidle').catch(() => {});
-  await editor.waitForTimeout(9000);
-  // 열기 실패(손상/형식오류) 감지 — 다이얼로그가 늦게 뜰 수 있어 한 번 더 확인
-  let err = await detectOpenError(editor);
-  if (!err) { await editor.waitForTimeout(2500); err = await detectOpenError(editor); }
-  if (err) throw new CannotOpenError(name);
-  return editor;
+  // 고정 대기 대신 "준비되면 진행"(내용 렌더 or 에러 다이얼로그 즉시 감지) — 매 호출 ~5초 절약
+  const st = await waitForReady(editor);
+  if (st === 'error') throw new CannotOpenError(name);
+  return editor; // 'timeout'이어도 진행(렌더 매우 느린 예외 케이스)
+}
+
+// 고정 대기 대신 "준비되면 진행": 캔버스 내용(어두운 픽셀) or 에러 다이얼로그 뜨면 즉시 반환.
+async function waitForReady(ed, maxMs = 12000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const s = await ed.evaluate(() => {
+      const t = (document.body && document.body.innerText) || '';
+      if (/문서를\s*열\s*수\s*없습니다|파일을\s*여는\s*동안\s*오류/.test(t)) return { error: true };
+      const el = document.getElementById('hcwoViewScroll'); if (!el) return {};
+      const cvs = [...document.querySelectorAll('canvas')]; if (!cvs.length) return {};
+      let c = cvs[0]; for (const x of cvs) if (x.width * x.height > c.width * c.height) c = x;
+      let dark = 0;
+      try { const d = c.getContext('2d').getImageData(0, 0, c.width, Math.min(c.height, 600)).data; for (let k = 0; k < d.length; k += 4) if (d[k] < 200) { if (++dark > 50) break; } } catch (e) {}
+      return { ready: dark > 50 };
+    }).catch(() => ({}));
+    if (s.error) return 'error';
+    if (s.ready) { await ed.waitForTimeout(700); return 'ready'; }
+    await ed.waitForTimeout(350);
+  }
+  return (await detectOpenError(ed)) ? 'error' : 'timeout';
 }
 
 async function uploadFile(page, filePath) {
