@@ -10,6 +10,16 @@
 
 > hwp **내용 읽기/편집**이 목적이면 [claw-hwp](https://github.com/DoHyun468/claw-hwp) 스킬을 쓰세요. 이 스킬은 "**한컴독스에서 어떻게 보이는지**"를 캡처하는 용도입니다.
 
+## 데모 — 영역 확대(zoom)
+
+전체 페이지에서 원하는 영역을 골라(왼쪽) 고해상도로 잘라냅니다(오른쪽).
+
+| `capture --grid` 로 좌표 잡기 | `zoom --clip` 결과 |
+|---|---|
+| ![선택](assets/demo_spotlight_b1_8.png) | ![확대](assets/demo_zoom_b1_8.png) |
+
+> 30쪽짜리 문서의 29쪽에서 `[B] 문단 모양` 섹션(B1~B8)만 `zoom --clip "35,300,715,510" --scale 3` 으로 추출.
+
 ## 설치 (환경마다 1회)
 
 ```bash
@@ -71,6 +81,7 @@ node hancom.js around --name report.hwp --text "지원대상"
 - [`SKILL.md`](SKILL.md) — Claude Code 스킬 정의 (트리거 · 온보딩 · 명령)
 - [`ORDER_SPEC.txt`](ORDER_SPEC.txt) — 에이전트 주문(명령) 명세
 - [`DEBUG_NOTES.md`](DEBUG_NOTES.md) — 개발 노트 (접근법, webhwp 내부 발견, 안전 교훈, 실패 모드)
+- [`GARBAGE_REPRO.md`](GARBAGE_REPRO.md) — '조용한 garbage 렌더'(모드 ②) 재현 과정 (디버그팀용)
 
 ## 라이선스
 
