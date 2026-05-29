@@ -53,11 +53,15 @@ node login.js     # 보이는 브라우저 창이 뜸 (백그라운드로 실행
 node hancom.js capture --file <절대경로> [--page N] [--grid] [--scale N] [--out <png>]
 node hancom.js zoom    --name <문서이름>  --clip "x,y,w,h" [--page N] [--scale N] [--out <png>]
 node hancom.js around  --name <문서이름>  --text "<검색어>" [--grid] [--out <png>]
+node hancom.js locate  --name <문서이름>  --clues "a,b,c" [--grid] [--out <png>]
 ```
 
 - **capture**: 파일을 (필요시) 업로드하고 N쪽(기본 1)을 **A4 한 장 깔끔히** 캡처(툴바·여백 없음, 잘림 없음). 반환 `{shot, docName, page, estTotalPages, pageWidth, pageHeight}`.
 - **zoom**: 이미 올라간 문서의 특정 영역 확대. 좌표는 **페이지 왼쪽위=(0,0)** 기준 CSS px. 기본 scale 3.
 - **around**: 한컴독스 "찾기"로 텍스트를 찾아 **그 매치가 있는 페이지**를 캡처(정확). 검색칸에만 입력해 문서는 편집 안 됨.
+- **locate**: 여러 단서를 각각 검색해 **가장 많이 모이는(최빈) 페이지**를 찾아 캡처. 한 단어가 TOC/반복에 걸려도 다수결로 버팀.
+
+> **어느 걸 쓰나:** 쪽 번호 알면 `capture --page`(가장 쌈·정확). 고유한 구절 있으면 `around`(검색 1회). 흔한 단어만 있으면 `locate`(N회 검색이라 느리지만 다수결로 정확). 한 단어는 TOC·반복에 약하니 **구체적 구절 > 단어**.
 
 ### 좌표를 모를 때 — 권장 흐름 (캔버스 렌더라 텍스트 위치 자동탐색 불가)
 1. `capture --file X --page N --grid` → 페이지 위에 100px 좌표 격자+라벨이 얹힌 이미지를 받는다.

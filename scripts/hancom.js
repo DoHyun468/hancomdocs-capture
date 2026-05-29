@@ -298,13 +298,59 @@ async function cmdAround(args) {
   });
 }
 
+// 여러 단서를 각각 검색해 가장 많이 수렴하는 페이지를 찾아 캡처 (반복/모호한 단어 보완).
+async function cmdLocate(args) {
+  if (!args.name || !args.clues) throw new Error('--name 과 --clues "a,b,c" 필요');
+  const clues = String(args.clues).split(',').map((s) => s.trim()).filter(Boolean);
+  if (!clues.length) throw new Error('--clues 가 비어있음');
+  const scale = Number(args.scale) || 1.5;
+  fs.mkdirSync(CAPDIR, { recursive: true });
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const results = [];
+    for (const clue of clues) {
+      const ctx = await browser.newContext({ storageState: AUTH, viewport: VIEW, deviceScaleFactor: 1 });
+      const page = await ctx.newPage();
+      try {
+        const ed = await openDoc(ctx, page, args.name);
+        if (!ed) throw new Error('문서를 못 찾음: ' + args.name);
+        const r = await findText(ed, clue);
+        results.push({ clue, page: r.found ? r.page : null });
+        log(`  '${clue}' → ${r.found ? r.page + '쪽' : '없음'}`);
+      } finally { await ctx.close(); }
+    }
+    // 최빈 페이지 = 수렴 지점
+    const votes = {};
+    results.forEach((r) => { if (r.page) votes[r.page] = (votes[r.page] || 0) + 1; });
+    const ranked = Object.entries(votes).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]));
+    const converged = ranked.length ? Number(ranked[0][0]) : null;
+    let shot = null;
+    if (converged) {
+      const ctx = await browser.newContext({ storageState: AUTH, viewport: VIEW, deviceScaleFactor: scale });
+      const page = await ctx.newPage();
+      try {
+        const ed = await openDoc(ctx, page, args.name);
+        await gotoPage(ed, converged);
+        const rect = await detectPageRect(ed);
+        if (!rect || rect.width < 100) throw new Error('A4 페이지 영역 검출 실패');
+        await hideOverlays(ed);
+        if (args.grid) await injectGrid(ed, rect);
+        shot = args.out || path.join(CAPDIR, `${String(args.name).replace(/\.[^.]+$/, '')}_locate_p${converged}_${stamp()}.png`);
+        await ed.screenshot({ path: shot, clip: rect });
+      } finally { await ctx.close(); }
+    }
+    out({ cmd: 'locate', clues: results, votes, converged, shot });
+  } finally { await browser.close(); }
+}
+
 (async () => {
   const args = parseArgs(process.argv.slice(2));
   try {
     if (args._ === 'capture') await cmdCapture(args);
     else if (args._ === 'zoom') await cmdZoom(args);
     else if (args._ === 'around') await cmdAround(args);
-    else { log('사용법: capture --file <경로> [--page N] [--grid] | zoom --name <이름> --clip "x,y,w,h" [--page N] | around --name <이름> --text "<검색어>" [--grid]'); process.exit(2); }
+    else if (args._ === 'locate') await cmdLocate(args);
+    else { log('사용법: capture --file <경로> [--page N] [--grid] | zoom --name <이름> --clip "x,y,w,h" [--page N] | around --name <이름> --text "<검색어>" [--grid] | locate --name <이름> --clues "a,b,c" [--grid]'); process.exit(2); }
     process.exit(0);
   } catch (e) {
     if (e instanceof CannotOpenError || e.message === 'CANNOT_OPEN') {
