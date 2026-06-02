@@ -16,17 +16,18 @@ Playwright headless로 동작 — **보이는 창 없음**, 물리 마우스/키
 
 캡처/줌/검색을 돌리기 전에 **두 가지 1회 세팅**이 돼 있는지 먼저 확인한다. 환경(머신)마다 1회 필요.
 
+> **OS 무관**: 이 스킬은 Windows·macOS·Linux에서 같은 코드로 동작한다. 아래 명령은 모두 `node`로만 점검/실행하므로 셸(bash/PowerShell) 종류와 무관하다. **`&&` 체이닝은 쓰지 말 것**(PowerShell에서 파싱 오류) — 명령은 한 줄에 하나씩 실행한다. 결과 `RESULT_JSON`은 ASCII-safe라 한글 코드페이지(CP949 등)에서도 안 깨진다.
+
 ```bash
-cd <이 스킬 폴더>/scripts     # SKILL.md가 있는 디렉토리의 scripts/
-# 1) playwright 설치 여부
-[ -d node_modules/playwright ] && echo "DEPS_OK" || echo "DEPS_MISSING"
-# 2) 로그인 세션 여부
-[ -f auth.json ] && echo "AUTH_OK" || echo "AUTH_MISSING"
+cd <이 스킬 폴더>/scripts     # SKILL.md가 있는 디렉토리의 scripts/ (경로 구분자는 / 로 써도 양 OS 동작)
+# 의존성·로그인 세션을 한 번에 점검 (bash/PowerShell 공통)
+node -e "const fs=require('fs');console.log(fs.existsSync('node_modules/playwright')?'DEPS_OK':'DEPS_MISSING');console.log(fs.existsSync('auth.json')?'AUTH_OK':'AUTH_MISSING')"
 ```
 
 ### DEPS_MISSING 이면 (의존성 설치 — 비대화, 에이전트가 바로 실행)
 ```bash
-npm install && npx playwright install chromium
+npm install
+npx playwright install chromium
 ```
 (Chromium ~수백 MB 다운로드, 1~2분. 사용자에게 "최초 1회 설치 중"이라고 알려라.)
 

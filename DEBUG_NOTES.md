@@ -2,7 +2,7 @@
 
 한컴독스(hancomdocs.com 웹 뷰어 webhwp)에 .hwp/.hwpx 파일을 자동 업로드하고,
 렌더된 페이지를 이미지로 캡처/확대/텍스트검색하는 도구를 만든 과정과 기술적 발견 정리.
-위치: `~/Documents/sideproj/hancom-auto/`. 핵심 파일: `hancom.js`(에이전트 CLI), `login2.js`(로그인), `ORDER_SPEC.txt`(주문 명세).
+위치: `~/Documents/sideproj/hancom-auto/`. 핵심 파일: `hancom.js`(에이전트 CLI), `login.js`(로그인), `ORDER_SPEC.txt`(주문 명세).
 
 ---
 
@@ -19,8 +19,8 @@
 ## 2. 로그인 / 세션 (비밀번호 저장 안 함)
 
 - **storageState 패턴**: 비밀번호 대신 로그인된 세션(쿠키+localStorage)을 `auth.json`으로 저장해 재사용.
-- **함정**: 한컴 SSO는 **세션 쿠키**(만료시간 없음)라, persistentContext를 재시작하면 Chromium이 디스크에 안 남기고 버린다 → 로그아웃됨. 그래서 **로그인 직후 그 자리에서 `ctx.storageState({path})`로 떠야** 세션 쿠키까지 캡처된다. `login2.js`가 로그인 완료를 자동 감지(URL이 accounts.hancom.com 벗어나고 업로드 UI 등장)해서 즉시 저장.
-- 로그인은 Kakao OAuth 경유. `auth.json`은 **현재 세션 그 자체**라 민감 → chmod 600 + .gitignore. 만료 시 `node login2.js` 재실행으로 갱신.
+- **함정**: 한컴 SSO는 **세션 쿠키**(만료시간 없음)라, persistentContext를 재시작하면 Chromium이 디스크에 안 남기고 버린다 → 로그아웃됨. 그래서 **로그인 직후 그 자리에서 `ctx.storageState({path})`로 떠야** 세션 쿠키까지 캡처된다. `login.js`가 로그인 완료를 자동 감지(URL이 accounts.hancom.com 벗어나고 업로드 UI 등장)해서 즉시 저장.
+- 로그인은 Kakao OAuth 경유. `auth.json`은 **현재 세션 그 자체**라 민감 → chmod 600 + .gitignore. 만료 시 `node login.js` 재실행으로 갱신.
 - 앱 URL: 홈 `/ko/home`, 드라이브 `/ko/mydrive`. 미로그인 시 `accounts.hancom.com`으로 리다이렉트 → 이걸로 **AUTH_EXPIRED** 판정.
 
 ## 3. webhwp 웹 뷰어 내부 — 디버깅에서 알아낸 것들 (핵심)
@@ -87,5 +87,5 @@ node hancom.js around  --name <이름> --text "<검색어>" [--grid]         # �
 ## 9. 환경 1회 세팅 (다른 머신/세션 재현)
 
 1. `npm i playwright` + `npx playwright install chromium`
-2. `node login2.js` → 뜬 브라우저에서 한컴독스 로그인 → `auth.json` 자동 생성(계정 로그인이라 복사 불가, 머신마다 1회).
+2. `node login.js` → 뜬 브라우저에서 한컴독스 로그인 → `auth.json` 자동 생성(계정 로그인이라 복사 불가, 머신마다 1회).
 이후엔 위 CLI가 헤드리스로 동작. 스킬화하면 SKILL.md+스크립트는 복사로 전파, 세팅만 1회.

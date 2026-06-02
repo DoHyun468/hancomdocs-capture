@@ -35,6 +35,8 @@ npx playwright install chromium     # Chromium 다운로드 (~수백 MB)
 node login.js
 ```
 
+> **OS 무관 (Windows·macOS·Linux 동일)**: `node`만 깔려 있으면 같은 코드로 동작한다. Windows에서는 PowerShell로 위 명령을 **한 줄씩** 실행(`&&` 체이닝은 PowerShell에서 안 됨). 파일 경로는 그 OS 방식대로 — Windows는 `--file C:\path\report.hwp`, mac/Linux는 `--file /abs/report.hwp`.
+
 스킬로 쓸 때는 위 과정을 SKILL.md가 **자동 점검·안내**합니다 — 사용자는 "이 hwp 한컴독스에 올려서 보여줘"라고만 하면 됩니다.
 
 ## 사용
