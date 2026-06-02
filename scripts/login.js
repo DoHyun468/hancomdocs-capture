@@ -10,7 +10,10 @@ const AUTH = path.join(__dirname, 'auth.json');
   const ctx = await chromium.launchPersistentContext(PROFILE, {
     headless: false,
     viewport: { width: 1280, height: 900 },
-    args: ['--no-first-run', '--no-default-browser-check'],
+    // OAuth 제공자(특히 Google)가 자동화 제어 브라우저를 차단("이 브라우저는 안전하지 않을 수 있음")하는 것을
+    // 회피: --enable-automation 기본 플래그를 빼고 navigator.webdriver 표식을 끈다. (OS 무관 런치 옵션)
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--no-first-run', '--no-default-browser-check', '--disable-blink-features=AutomationControlled'],
   });
   const page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto('https://www.hancomdocs.com/home', { waitUntil: 'domcontentloaded' });

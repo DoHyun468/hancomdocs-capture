@@ -17,6 +17,9 @@ const MYDRIVE = 'https://www.hancomdocs.com/ko/mydrive';
 // 세로로 긴 뷰포트: A4 한 장이 통째로 들어가게
 const VIEW = { width: 1280, height: 1500 };
 const PAGE_H = 1143; // 100% 줌·A4 기준 페이지당 스크롤 높이(px), 문서 무관 일정
+// 브라우저 표시 모드 — 기본은 headless(창 없음). --headed면 창을 띄워 동작을 눈으로 볼 수 있다(디버그용).
+// (OS 분기 아님 — 런타임 옵션. headed일 때만 slowMo로 동작을 천천히 보여줌.)
+let HEADED = false, SLOWMO = 0;
 
 function parseArgs(argv) {
   const a = { _: argv[0] };
@@ -35,14 +38,17 @@ function stamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 const log = (...x) => console.log(...x);
-const out = (o) => log('RESULT_JSON=' + JSON.stringify(o));
+// RESULT_JSON은 기계 판독용 — 비ASCII를 \uXXXX로 이스케이프해 어떤 콘솔 코드페이지(Win CP949 등)서도
+// 깨지지 않게 한다. 여전히 유효한 JSON이라 파싱하면 한글이 그대로 복원됨. (OS 무관)
+const asciiSafe = (s) => Array.from(s).map((c) => c.charCodeAt(0) > 126 ? '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0') : c).join('');
+const out = (o) => log('RESULT_JSON=' + asciiSafe(JSON.stringify(o)));
 
 async function ensureLoggedIn(page, url) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   // 리다이렉트가 마무리될 짧은 여유만 (networkidle 대신 domcontentloaded + 0.8s)
   await page.waitForTimeout(800);
   if (page.url().includes('accounts.hancom.com') || page.url().includes('/login')) {
-    throw new Error('AUTH_EXPIRED — node login2.js 로 재로그인 필요');
+    throw new Error('AUTH_EXPIRED — node login.js 로 재로그인 필요');
   }
 }
 
@@ -196,7 +202,7 @@ async function uploadFile(page, filePath) {
 }
 
 async function withEditor(scale, fn) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: !HEADED, slowMo: SLOWMO });
   const ctx = await browser.newContext({ storageState: AUTH, viewport: VIEW, deviceScaleFactor: scale, acceptDownloads: true });
   try { return await fn(ctx, await ctx.newPage()); }
   finally { await browser.close(); }
@@ -274,7 +280,7 @@ async function findText(ed, text) {
   });
   if (!box) throw new Error('검색칸 탐색 실패');
   await ed.mouse.click(box.x + Math.min(box.w / 2, 40), box.y + box.h / 2);
-  await ed.keyboard.press('Meta+A');
+  await ed.keyboard.press('ControlOrMeta+A'); // 전체선택: Win/Linux→Ctrl+A, Mac→Cmd+A 자동 매핑(OS 무관)
   await ed.keyboard.type(text, { delay: 25 });
   // "다음 찾기" 버튼 ≈ 검색칸 오른쪽(+70, 같은 행)
   const nextBtn = { x: box.x + box.w + 70, y: box.y - 1 };
@@ -327,7 +333,7 @@ async function cmdLocate(args) {
   if (!clues.length) throw new Error('--clues 가 비어있음');
   const scale = Number(args.scale) || 1.5;
   fs.mkdirSync(CAPDIR, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: !HEADED, slowMo: SLOWMO });
   try {
     const results = [];
     for (const clue of clues) {
@@ -367,6 +373,8 @@ async function cmdLocate(args) {
 
 (async () => {
   const args = parseArgs(process.argv.slice(2));
+  HEADED = !!args.headed;                                    // --headed: 창 띄워 보기(디버그)
+  SLOWMO = args.slowmo ? Number(args.slowmo) : (HEADED ? 400 : 0); // headed면 동작을 천천히
   try {
     if (args._ === 'capture') await cmdCapture(args);
     else if (args._ === 'zoom') await cmdZoom(args);

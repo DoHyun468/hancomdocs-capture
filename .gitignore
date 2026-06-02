@@ -7,3 +7,8 @@
 **/captures/
 *.log
 .DS_Store
+# 테스트/임시 산출물 (검증용 생성물 — 커밋 금지)
+test_*.hwp
+test_*.hwpx
+_*.json
+_*.js
