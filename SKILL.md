@@ -69,21 +69,31 @@ doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금�
 ```
 node hancom.js capture --file <절대경로> [--page N] [--grid] [--scale N] [--out <png>]
 node hancom.js zoom    --name <문서이름>  --clip "x,y,w,h" [--page N] [--scale N] [--out <png>]
-node hancom.js around  --name <문서이름>  --text "<검색어>" [--grid] [--out <png>]
+node hancom.js around  --name <문서이름>  --text "<검색어>" [--zoom [--band N]] [--grid] [--out <png>]
 node hancom.js locate  --name <문서이름>  --clues "a,b,c" [--grid] [--out <png>]
 ```
 
 - **capture**: 파일을 (필요시) 업로드하고 N쪽(기본 1)을 **A4 한 장 깔끔히** 캡처(툴바·여백 없음, 잘림 없음). 반환 `{shot, docName, page, estTotalPages, pageWidth, pageHeight}`.
 - **zoom**: 이미 올라간 문서의 특정 영역 확대. 좌표는 **페이지 왼쪽위=(0,0)** 기준 CSS px. 기본 scale 3.
 - **around**: 한컴독스 "찾기"로 텍스트를 찾아 **그 매치가 있는 페이지**를 캡처(정확). 검색칸에만 입력해 문서는 편집 안 됨.
+  - **`--zoom`**: 페이지 전체 대신 **매치 줄을 그 자리에서 확대**해 잘라낸다(가로 밴드, 기본 높이 180px·`--band`로 조절, 기본 scale 2.5). **격자 읽기·좌표 입력 없이** "이 텍스트를 가까이 보여줘"가 한 번에 됨.
 - **locate**: 여러 단서를 각각 검색해 **가장 많이 모이는(최빈) 페이지**를 찾아 캡처. 한 단어가 TOC/반복에 걸려도 다수결로 버팀.
+
+> **`--file` vs `--name`:** `capture`의 `--file`은 **절대경로**(없으면 업로드). `zoom`/`around`/`locate`의 `--name`은 **이미 올라간 문서의 파일명**(= capture 결과 `RESULT_JSON.docName`, 보통 파일 basename 예: `test_win.hwp`).
 
 > **어느 걸 쓰나:** 쪽 번호 알면 `capture --page`(가장 쌈·정확). 고유한 구절 있으면 `around`(검색 1회). 흔한 단어만 있으면 `locate`(N회 검색이라 느리지만 다수결로 정확). 한 단어는 TOC·반복에 약하니 **구체적 구절 > 단어**.
 
-### 좌표를 모를 때 — 권장 흐름 (캔버스 렌더라 텍스트 위치 자동탐색 불가)
-1. `capture --file X --page N --grid` → 페이지 위에 100px 좌표 격자+라벨이 얹힌 이미지를 받는다.
-2. 이미지를 보고 원하는 영역의 `x,y / 오른쪽끝 / 아래끝`을 읽는다 (`width=오른쪽끝-x`, `height=아래끝-y`, 경계보다 10~20px 여유).
+### 원하는 부분만 확대 — 두 가지 길
+**A) 텍스트가 보이면 → `around --zoom` (제일 쉬움, 격자 불필요).**
+- `around --name X --text "보고 싶은 구절" --zoom [--band 220]` → 그 구절이 있는 줄을 바로 확대 캡처.
+- 내부적으로 찾기 후 **캐럿(매치) 픽셀 위치**를 읽어 그 줄을 밴드로 자른다. 좌표를 직접 셀 필요가 없다.
+- 더 넓게 보려면 `--band`(밴드 높이) ↑, 더 선명히는 `--scale` ↑.
+
+**B) 텍스트로 못 짚는 대상(그림·표 레이아웃·여백) → 격자 흐름.** (캔버스 렌더라 위치 자동탐색 불가)
+1. `capture --file X --page N --grid` → 100px 좌표 격자+라벨이 얹힌 이미지.
+2. 이미지를 보고 `x,y / 오른쪽끝 / 아래끝`을 읽는다 (`width=오른쪽끝-x`, `height=아래끝-y`, 경계보다 10~20px 여유).
 3. `zoom --name X --page N --clip "x,y,width,height" --scale 3` → 선명한 확대본.
+   - 좌표계는 **페이지 왼쪽위=(0,0)** 으로 격자 라벨과 동일. 어긋나면 격자 이미지를 다시 띄워 라벨 숫자를 그대로 읽을 것.
 
 자세한 명세: `ORDER_SPEC.txt`.
 
@@ -96,7 +106,8 @@ node hancom.js locate  --name <문서이름>  --clues "a,b,c" [--grid] [--out <p
 ## 동작 메모 (수정/디버깅 시)
 - 본문은 `<canvas>` 렌더 → DOM 텍스트 없음. 페이지 점프는 `#hcwoViewScroll` scrollTop 제어(100%줌·A4 = 1143px/쪽).
 - 페이지 경계는 캔버스 픽셀 스캔으로 자동 검출(방향 무관: 세로 792×1121, 가로 1122×792).
-- 협업 커서 이름표는 `.user_cursor_container`를 캡처 직전 CSS로 숨김.
-- 키보드 단축키(Ctrl+F/End)는 webhwp에서 신뢰 불가 — 좌표/스크롤로만.
+- **캔버스가 2층**: 문서층(흰 배경=불투명 픽셀 다수) + **오버레이층**(거의 투명; 진입 presence '파란 물방울'·커서·캐럿). `hideOverlays`가 ① DOM 협업 흔적(`.user_cursor_container` 등)을 CSS로, ② **오버레이 캔버스를 `visibility:hidden`**(불투명 픽셀이 최대치의 5% 미만인 캔버스)으로 숨겨 **캡처에 물방울/커서가 안 박힌다**. 캡처에 파란 물방울이 보이면 이 오버레이 숨김이 안 먹은 것(또는 실제 타인이 동시 편집 중).
+- **찾기 UI는 셀렉터 기반**(좌표 아님): `openFindDialog`가 `a[title="찾기"]` + '찾기...' 메뉴의 DOM 위치를 읽어 연다. `around --zoom`은 찾기 후 캐럿(`#HWP_CURSOR_VIEW`) 픽셀 위치로 매치 줄을 확대.
+- 키보드 단축키(Ctrl+F/End)는 webhwp에서 신뢰 불가 — 좌표/스크롤/셀렉터로만.
 - ⚠️ **본문/툴바 input에 블라인드 입력 금지**(문서가 편집됨). 검색은 찾기 다이얼로그 검색칸만.
-- 전체 개발 노트: `./DEBUG_NOTES.md`.
+- 전체 개발 노트 + 캔버스 뷰어 디버깅 방법론: `./DEBUG_NOTES.md`.

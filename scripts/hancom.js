@@ -345,10 +345,23 @@ async function findText(ed, text) {
   await ed.mouse.click(nextBtn.x, nextBtn.y); await ed.waitForTimeout(1600);
   // 찾기 직후 캐럿이 매치로 이동 → 상태바 '현재 쪽'이 매치의 실제 페이지(정확)
   const page = await readCurrentPage(ed);
+  // 캐럿(매치) 뷰포트 픽셀 위치 = '텍스트 위치로 바로 확대'의 앵커. 닫기 전에 읽어둔다.
+  const caret = await readCaretRect(ed);
   await ed.mouse.click(nextBtn.x, nextBtn.y + 53); await ed.waitForTimeout(700); // 닫기
   await ed.keyboard.press('Escape'); await ed.waitForTimeout(400); // 검색 하이라이트 제거(혼동 방지)
   // 새 세션이라 캐럿이 1쪽에서 시작 → 매치가 2쪽 이상이면 page>1. (1쪽 매치/미발견 구분은 한계)
-  return page && page > 0 ? { found: true, page } : { found: false };
+  return page && page > 0 ? { found: true, page, caret } : { found: false };
+}
+
+// 찾기 직후 캐럿(매치 위치) 요소의 뷰포트 사각형. webhwp 는 캐럿을 DOM 요소로 그린다.
+async function readCaretRect(ed) {
+  return await ed.evaluate(() => {
+    const el = document.querySelector('#HWP_CURSOR_VIEW, .BLINK_CURSOR');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  }).catch(() => null);
 }
 
 // 상태바 "현재 쪽 / 전체쪽" 에서 현재 쪽(캐럿 기준) 읽기
@@ -365,14 +378,34 @@ async function readCurrentPage(ed) {
 
 async function cmdAround(args) {
   if (!args.name || !args.text) throw new Error('--name 과 --text 필요');
-  const scale = Number(args.scale) || 1.5;
+  // --zoom: 매치 줄을 확대(고배율 기본). 일반 around 는 페이지 전체(1.5).
+  const scale = Number(args.scale) || (args.zoom ? 2.5 : 1.5);
   fs.mkdirSync(CAPDIR, { recursive: true });
   await withEditor(scale, async (ctx, page) => {
     const editor = await openDoc(ctx, page, args.name);
     if (!editor) throw new Error('문서를 못 찾음: ' + args.name);
     const r = await findText(editor, String(args.text));
     if (!r.found) { out({ cmd: 'around', found: false, text: args.text }); return; }
-    // 매치 페이지를 깔끔히 정렬 후 클린 캡처
+
+    // --zoom: 격자 읽기 없이 '텍스트 위치로 바로 확대'. 찾기가 이미 매치로 스크롤했으므로
+    //   gotoPage 생략하고, 그 스크롤 상태에서 캐럿 줄을 가로 밴드로 잘라낸다.
+    if (args.zoom && r.caret) {
+      const rect = await detectPageRect(editor);
+      if (!rect || rect.width < 100) throw new Error('A4 페이지 영역 검출 실패');
+      await hideOverlays(editor);
+      const band = Number(args.band) || 180;               // 매치 줄 위아래 포함 높이(페이지 px)
+      const top = Math.max(rect.y, r.caret.y - Math.round(band / 2));
+      const clip = {
+        x: rect.x, y: top, width: rect.width,
+        height: Math.max(40, Math.min(band, rect.y + rect.height - top)),
+      };
+      const shot = args.out || path.join(CAPDIR, `${String(args.name).replace(/\.[^.]+$/, '')}_findzoom_${stamp()}.png`);
+      await editor.screenshot({ path: shot, clip });
+      out({ cmd: 'around', found: true, zoom: true, text: args.text, page: r.page, shot, pageWidth: rect.width, band, scale });
+      return;
+    }
+
+    // 기본: 매치 페이지를 깔끔히 정렬 후 페이지 전체 클린 캡처
     await gotoPage(editor, r.page);
     const rect = await detectPageRect(editor);
     if (!rect || rect.width < 100) throw new Error('A4 페이지 영역 검출 실패');
