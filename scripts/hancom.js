@@ -144,13 +144,44 @@ async function detectOpenError(editor) {
 
 class CannotOpenError extends Error { constructor(name) { super('CANNOT_OPEN'); this.docName = name; } }
 
-// 협업 커서 이름표(.user_cursor_container)·협업 패널·채팅 위젯 숨기기 (캡처 혼동 방지)
+// 협업/오버레이 흔적 숨기기 (캡처 혼동 방지).
+//   DOM 흔적: 협업 커서 이름표·협업자 패널·채팅 위젯 → CSS로 가림.
+//   캔버스 흔적: webhwp 는 캔버스를 2층으로 쌓는다 — '문서' 캔버스(흰 배경=불투명 픽셀 다수)와
+//     '오버레이' 캔버스(거의 투명; 진입 presence '파란 물방울'·캐럿·원격커서가 여기 그려짐).
+//     오버레이 캔버스만 visibility:hidden 하면 본문은 그대로 두고 물방울/커서를 즉시 제거(대기 0초).
+//     (과거엔 '캔버스라 못 가림 → 단일 세션 보장만이 해결'로 오진했으나, 층을 나눠 가리면 됨.)
 async function hideOverlays(ed) {
   await ed.addStyleTag({ content: `
     .user_cursor_container, .collaborationusers, .user_list, .collabo_user_list,
     .aori_widget, .aori_temp_widget, .aori_main_btn, .aori_main_area
     { display: none !important; visibility: hidden !important; }
   ` }).catch(() => {});
+  await hideOverlayCanvases(ed);
+}
+
+// 오버레이 캔버스(거의 투명) 숨김. 문서/타일 캔버스(불투명 픽셀 다수)는 보존.
+// 불투명 픽셀이 가장 많은 캔버스의 5% 미만인 캔버스만 오버레이로 보고 숨긴다(문서 타일 보호).
+async function hideOverlayCanvases(ed) {
+  await ed.evaluate(() => {
+    const cvs = [...document.querySelectorAll('canvas')];
+    if (cvs.length < 2) return; // 캔버스 1장이면 가릴 오버레이 없음
+    const stats = cvs.map((c) => {
+      let opaque = -1; // -1 = tainted/판독불가 → 건드리지 않음
+      try {
+        const d = c.getContext('2d').getImageData(0, 0, c.width, Math.min(c.height, 1200)).data;
+        opaque = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 10) opaque++;
+      } catch { opaque = -1; }
+      return { c, opaque };
+    });
+    const maxOpaque = Math.max(...stats.map((s) => s.opaque));
+    if (maxOpaque <= 0) return;
+    for (const s of stats) {
+      if (s.opaque >= 0 && s.opaque < maxOpaque * 0.05) {
+        s.c.style.setProperty('visibility', 'hidden', 'important');
+      }
+    }
+  }).catch(() => {});
 }
 
 async function openDoc(ctx, page, name) {
@@ -158,14 +189,18 @@ async function openDoc(ctx, page, name) {
   const row = page.getByText(name, { exact: false }).first();
   // 고정 대기 대신 행이 뜰 때까지만 (없으면 null → 업로드 경로)
   try { await row.waitFor({ timeout: 6000 }); } catch { return null; }
+  // 드라이브는 '한 번 클릭 = 열기'. dblclick 은 열기를 2번 트리거해 편집기 탭이 2개 뜨고
+  // 둘째(방치) 탭이 같은 계정 협업자로 잡힐 수 있어 단일 click 으로 연다(중복 세션 예방).
   const [editor] = await Promise.all([
     ctx.waitForEvent('page', { timeout: 12000 }),
-    row.dblclick(),
+    row.click(),
   ]);
   await editor.waitForLoadState('networkidle').catch(() => {});
   // 고정 대기 대신 "준비되면 진행"(내용 렌더 or 에러 다이얼로그 즉시 감지) — 매 호출 ~5초 절약
   const st = await waitForReady(editor);
   if (st === 'error') throw new CannotOpenError(name);
+  // 진입 presence(파란 물방울)는 대기로 빼지 않고, 스크린샷 직전 hideOverlays 에서
+  // '오버레이 캔버스 숨김'으로 즉시 제거한다(대기 0초).
   return editor; // 'timeout'이어도 진행(렌더 매우 느린 예외 케이스)
 }
 
@@ -266,11 +301,34 @@ async function cmdZoom(args) {
   });
 }
 
+// 찾기 다이얼로그 열기 — 툴바 '찾기' 버튼을 DOM 셀렉터(title)로, 드롭다운의 '찾기...' 항목은
+// 실제 위치를 DOM에서 읽어 클릭. (기존 하드코딩 좌표 click(309,95)/(335,167)는 창크기·UI버전·
+// 배율에 따라 어긋나 다이얼로그가 안 열려 실패 → 셀렉터/DOM-위치로 견고화. OS 무관.)
+async function openFindDialog(ed) {
+  await ed.locator('a[title="찾기"]').first().click(); // 메인 찾기 버튼(title 고정 = 좌표 무관)
+  await ed.waitForTimeout(900);
+  // 드롭다운에서 '보이는' 찾기... 메뉴 항목의 실제 중심좌표를 읽어 클릭(좌표 드리프트 무관).
+  // 숨은 동음 항목(툴바 버튼 라벨)을 피하려 offsetParent!=null 로 가시성 필터.
+  const item = await ed.evaluate(() => {
+    for (const el of document.querySelectorAll('a, div, span')) {
+      const t = (el.textContent || '').trim();
+      if (/^찾기\.\.\./.test(t) && t.length < 16) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 20 && r.height > 8 && el.offsetParent !== null)
+          return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      }
+    }
+    return null;
+  });
+  if (!item) throw new Error('찾기 메뉴 항목(찾기...) 탐색 실패');
+  await ed.mouse.click(item.x, item.y);
+  await ed.waitForTimeout(1200);
+}
+
 // 찾기 다이얼로그를 열고 text를 검색해 매치로 점프. 검색칸에만 입력(편집 사고 방지).
 // 반환: {found, scrollTop, page} | null
 async function findText(ed, text) {
-  await ed.mouse.click(309, 95); await ed.waitForTimeout(900);   // 찾기 드롭다운(툴바, 위치 고정)
-  await ed.mouse.click(335, 167); await ed.waitForTimeout(1200); // "찾기..." 메뉴
+  await openFindDialog(ed);
   // 새로 뜬 보이는 input = 검색칸
   const box = await ed.evaluate(() => {
     const ins = Array.from(document.querySelectorAll('input')).map(el => { const r = el.getBoundingClientRect(); return { el, x: r.x, y: r.y, w: r.width, h: r.height, vis: r.width > 60 && r.height > 10 && getComputedStyle(el).visibility !== 'hidden' && el.getAttribute('aria-label') !== '문서 편집 영역' }; });

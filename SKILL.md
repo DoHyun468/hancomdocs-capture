@@ -12,39 +12,55 @@ Playwright headless로 동작 — **보이는 창 없음**, 물리 마우스/키
 
 > 이건 "**렌더 결과를 눈으로 보고 싶다**"는 도구. hwp **내용 읽기/편집**은 `claw-hwp:hwp` 스킬을 써라.
 
-## ⚙️ 첫 실행 — 세팅부터 점검 (매 캡처 전에 반드시)
+## ⚙️ 첫 실행 — 무조건 `doctor.js` 부터 (매 캡처 전 1회)
 
-캡처/줌/검색을 돌리기 전에 **두 가지 1회 세팅**이 돼 있는지 먼저 확인한다. 환경(머신)마다 1회 필요.
+캡처/줌/검색을 돌리기 전에 **항상 먼저** 자가진단을 돌린다. 무엇이 준비됐고 다음에 뭘 할지 doctor가 한 번에 알려준다 — 너는 직접 점검하지 말고 doctor가 시키는 대로만 하면 된다.
 
-> **OS 무관**: 이 스킬은 Windows·macOS·Linux에서 같은 코드로 동작한다. 아래 명령은 모두 `node`로만 점검/실행하므로 셸(bash/PowerShell) 종류와 무관하다. **`&&` 체이닝은 쓰지 말 것**(PowerShell에서 파싱 오류) — 명령은 한 줄에 하나씩 실행한다. 결과 `RESULT_JSON`은 ASCII-safe라 한글 코드페이지(CP949 등)에서도 안 깨진다.
+> **OS 무관**: 이 스킬은 Windows·macOS·Linux에서 같은 코드로 동작한다. 모든 명령은 `node`로만 실행하므로 셸(bash/PowerShell) 종류와 무관하다. **`&&` 체이닝은 쓰지 말 것**(PowerShell 파싱 오류) — 한 줄에 하나씩. 결과 `RESULT_JSON`은 ASCII-safe라 한글 코드페이지(CP949 등)에서도 안 깨진다.
 
 ```bash
-cd <이 스킬 폴더>/scripts     # SKILL.md가 있는 디렉토리의 scripts/ (경로 구분자는 / 로 써도 양 OS 동작)
-# 의존성·로그인 세션을 한 번에 점검 (bash/PowerShell 공통)
-node -e "const fs=require('fs');console.log(fs.existsSync('node_modules/playwright')?'DEPS_OK':'DEPS_MISSING');console.log(fs.existsSync('auth.json')?'AUTH_OK':'AUTH_MISSING')"
+cd <이 스킬 폴더>/scripts     # SKILL.md가 있는 디렉토리의 scripts/ (구분자는 / 로 써도 양 OS 동작)
+node doctor.js
 ```
 
-### DEPS_MISSING 이면 (의존성 설치 — 비대화, 에이전트가 바로 실행)
-```bash
-npm install
-npx playwright install chromium
-```
-(Chromium ~수백 MB 다운로드, 1~2분. 사용자에게 "최초 1회 설치 중"이라고 알려라.)
+> **`node` 명령이 안 먹으면**(command not found): node가 설치돼 있어도 PATH에 없을 수 있다(특히 Windows). 설치돼 있으면 절대경로로 실행하라 — Windows 기본은 `C:\Program Files\nodejs\node.exe`, macOS(homebrew)는 `/opt/homebrew/bin/node` 또는 `/usr/local/bin/node`. 한 번 풀경로로 doctor를 돌리면 이후엔 doctor가 알려주는 `node.path`를 그대로 쓰면 된다. node 자체가 없으면 사용자에게 Node.js 설치를 요청하라.
 
-### AUTH_MISSING 이면 (로그인 — 대화형, 사용자 조작 필요)
-```bash
-node login.js     # 보이는 브라우저 창이 뜸 (백그라운드로 실행)
-```
-그리고 **사용자에게 이렇게 안내**한다:
-> "한컴독스 로그인 창을 띄웠어요. 그 창에서 **한컴독스에 로그인**만 해주세요(카카오 등 평소대로). 홈 화면이 뜨면 제가 자동으로 세션을 저장합니다 — 창 닫을 필요 없어요."
+doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금을 점검하고 마지막 줄에
+`RESULT_JSON={ ok, status, checks, node:{path}, next:{ who, commands, note } }` 를 찍는다.
 
-`login.js`는 로그인 완료를 자동 감지해 `auth.json`을 저장하고 종료한다(최대 5분 대기). 완료되면 캡처로 진행.
-**비밀번호는 어디에도 저장 안 한다** — 세션 토큰만 `auth.json`에 저장(세션 만료 시 `node login.js` 재실행으로 갱신).
+**판단 규칙은 단 하나: `next.who` 를 보고 행동한다.**
+- `who:"agent"` → `next.commands` 를 **네가 직접 실행**한다.
+- `who:"user"` → **절대 네가 실행하지 말고**, 사용자에게 그 명령을 직접 돌리라고 안내한다.
 
-### 명령 실행 중 `{"status":"...AUTH_EXPIRED..."}` (exit 4) 가 나오면
-세션 만료다. `node login.js`로 재로그인 안내 후 다시 시도.
+`status` 별 대응:
 
-> `auth.json`은 현재 로그인 세션 그 자체라 민감. git에 올리지 말 것(이미 .gitignore됨).
+| status | 뜻 | 행동 |
+|---|---|---|
+| `READY` (exit 0) | 다 준비됨 | 바로 캡처(아래 "명령")로 진행 |
+| `DEPS_MISSING` (10) | 의존성 없음 | **에이전트가** `npm install` → `npx playwright install chromium` (수백 MB·1~2분, "최초 1회 설치 중" 안내) |
+| `CHROMIUM_MISSING` (11) | chromium만 없음 | **에이전트가** `npx playwright install chromium` |
+| `AUTH_MISSING` (12) | 로그인 세션 없음 | **사용자에게** 안내 (아래 ↓). **login.js를 네가 실행하지 마라.** |
+| `AUTH_EXPIRED` (4) | 세션 만료 (`--deep`에서만) | AUTH_MISSING과 동일 — **사용자에게** 재로그인 안내 |
+
+조치를 한 뒤에는 **`node doctor.js`를 다시 돌려 `READY`(exit 0)가 될 때까지 반복**한다. READY가 아니면 캡처를 시도하지 마라.
+
+> **빠른 점검 vs `--deep`**: 기본 `node doctor.js`는 파일·설치 존재만 본다(빠름, ~0.3초). `auth.json`이 **있어도 세션은 만료**됐을 수 있는데, 이건 캡처 때 `AUTH_EXPIRED`(exit 4)로 잡힌다. 미리 확실히 하려면 **`node doctor.js --deep`** — 실제 한컴독스에 접속해 세션 생존까지 확인(~2초). 만료면 그 자리에서 AUTH_EXPIRED를 돌려준다.
+
+> **node 가 PATH에 없을 때**: doctor 출력의 `node.path`(예: `C:\Program Files\nodejs\node.exe`)를 그대로 써서 이후 명령을 절대경로로 실행하면 된다. OS 분기 불필요.
+
+### AUTH_MISSING — 로그인 (사용자가 직접, 1회)
+로그인은 사람만 할 수 있고(OAuth), **창이 사용자 화면에 보여야** 한다. 에이전트가 `node login.js`를 실행하면 Windows에선 에이전트 세션에 창이 떠 **사용자에게 안 보인다**. 그러니 사용자에게 이렇게 안내한다:
+
+> "한컴독스 로그인이 1회 필요해요. **당신 세션에서 직접** 아래를 실행해 주세요(`!` 로 시작하면 이 세션에서 실행돼 결과가 여기로 들어와요):
+> `! node login.js`
+> 뜨는 창에서 **한컴독스에 로그인**만 하세요(카카오 등 평소대로). 홈 화면이 뜨면 세션이 자동 저장됩니다 — 창 닫을 필요 없어요."
+
+`login.js`는 로그인 완료를 자동 감지해 `auth.json`을 저장하고 종료한다(최대 5분 대기). 끝나면 `node doctor.js`로 `READY` 확인 후 캡처로 진행. **비밀번호는 어디에도 저장 안 한다** — 세션 토큰만 `auth.json`에.
+
+### 캡처 중 `{"status":"...AUTH_EXPIRED..."}` (exit 4) 가 나오면
+세션 만료다. 위 AUTH_MISSING과 동일하게 **사용자에게** `! node login.js` 재실행을 안내한 뒤 다시 시도.
+
+> `auth.json`은 현재 로그인 세션 그 자체라 민감. git에 올리지 말 것(이미 .gitignore됨). 머신마다 각자 1회 로그인이 필요(세션 공유 안 함).
 
 ## 🎯 명령 (에이전트 주문용)
 
