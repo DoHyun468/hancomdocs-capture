@@ -57,3 +57,42 @@
 - 불변식: OS 분기 금지(`if(windows)`/`process.platform` 추가 금지), 블라인드 입력 금지(검색은 찾기칸에만),
   capture는 pointer-only(shell-out 재도입 금지).
 - 실험 스크립트(`scripts/_*.js`)는 .gitignore — 커밋 안 됨.
+
+## Mac 콜드스타트 실측 (2026-06-08)
+대상 코드 = `feat/win-compat` 최신(`5cac41e`, around --zoom band 픽스 포함). **코드 무수정**으로 도는지 증명.
+환경: macOS, **Apple Silicon(arm64)**, node v24.14.0, chromium=playwright 1223(arm64). 모두 doctor가 풀경로 인식.
+
+### ① 진짜 콜드스타트 — 별도 `claude -p` 인스턴스 (맥락 0, SKILL.md만) ★본 증거
+- 방법: 사전 지식·대화 맥락이 **전혀 없는 새 `claude -p` 프로세스**에 "이 스킬을 처음 받았다 치고 SKILL.md만
+  보고 어떤 .hwp의 1쪽을 캡처하라"만 지시. 공정성 위해 **이 CLAUDE.md(자동 로드되는 개발노트)는 잠시 숨겨**
+  SKILL.md/ORDER_SPEC/DEBUG_NOTES만 노출. 내부 지식(doctor·격자·캐럿 등) 일절 안 흘림.
+- 결과: **막힘 0.** `doctor.js`(→READY, `who:"agent"`) → `hancom.js capture --file ... --page 1` 순서로
+  SKILL.md가 시키는 대로 **한 번에 완주**. 산출 PNG = A4 깨끗·**파란 물방울 없음**·본문 보존.
+- 결론: **SKILL.md 단독으로 신규 에이전트가 Mac에서 캡처를 완주 가능 — 콜드스타트 친화성 OK.**
+
+### ② 전체 명령 표면 점검 (같은 날·같은 환경, 보강)
+> 맥락 보유 세션에서 돌린 **보강 점검**(명령 커버리지·Mac 회귀 확인용). 콜드스타트 본 증거는 ①.
+
+| 명령 | 결과 | 시간 |
+|---|---|---|
+| `doctor.js` / `--deep` | READY / authLive=true(세션 라이브) | ~0.21s / ~2.26s |
+| login | **불필요**(세션 유효, 한컴 세션쿠키 무만료). DEPS/AUTH 미충족 경로는 콜드설치 때 별도 증명 | — |
+| capture(full) / `--grid` | A4 깨끗·물방울 없음·본문 보존 / 격자·경계 정상 | ~6.9s / ~6.9s |
+| zoom `--scale 3` | 선명 (단 좌표는 **격자에서 읽어야**; 추측하면 빈 영역=백지) | ~7.2s |
+| around / `--zoom --band 200`(2쪽) | found:true / 매치 줄이 밴드 안 = **band 픽스 회귀 OK** | ~12.5s / ~12.0s |
+| locate | 3단서 1쪽 다수결 수렴 | ~39.8s |
+
+### Mac 회귀 점검
+- **물방울 제거(본문 보존): OK.** 모든 캡처에서 좌상단 presence 물방울 없음, 본문 100% 보존.
+- **캔버스 구조(실측):** 캔버스 2장, CSS 1235×1252. 백킹스토어 DSF 비례(1.5→1852×1878, **2(retina)→2470×2504**).
+  불투명 픽셀 문서캔버스 ~1.40M(DSF1.5)/~1.84M(DSF2) vs **오버레이 0** → 5% 휴리스틱이 문서 보존·오버레이만
+  숨김. 비율 기준이라 **retina에서도 본문 사라짐 없음**(scale-invariant).
+- **찾기 다이얼로그(셀렉터): OK.** `a[title="찾기"]`가 Mac UI에서 동작(around/locate/around --zoom 성공).
+
+### SKILL.md 개선 포인트 (1개)
+- `zoom`은 격자 좌표를 먼저 안 읽고 추측하면 빈 영역을 잘라 **백지**가 나온다(보강 점검 중 1회 발생). SKILL.md
+  경로 B에 "격자 읽고 zoom"이 이미 있으나, "좌표 추측 금지(빗나가면 백지)" 한 줄 강조하면 콜드 에이전트가 덜 헤맴.
+  (단, ① 진짜 콜드스타트는 capture만 요청해서 이 지점에 안 닿았고 막힘 0이었다.)
+
+### 불변식
+- OS 분기 없음 / auth 비커밋 / 블라인드입력 없음 / pointer-only / 사적정보·일반화 없음 / 에이전트 login 미실행 : 각 OK.
