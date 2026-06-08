@@ -106,4 +106,5 @@
   "격자 읽고 zoom"이 이미 있으나, "좌표 추측 금지(빗나가면 백지)" 한 줄 강조하면 콜드 에이전트가 덜 헤맨다.
 
 ### 불변식
-- OS 분기 없음 / auth 비커밋 / 블라인드입력 없음 / pointer-only / 사적정보·일반화 없음 / 에이전트 login 미실행 : 각 OK.
+- OS 분기 없음 / auth 비커밋 / 블라인드입력 없음 / pointer-only / 사적정보·일반화 없음 : 각 OK.
+- ⚠️ **login 정책 변경(폐기됨: "에이전트 login 미실행"):** 이제 **기본은 에이전트가 직접 `node login.js`로 로그인 창을 띄운다**(doctor `next.who:agent`). 창이 사용자에게 안 보이는 **SSH/원격 비대화형 셸(대표적으로 Windows OpenSSH = Session 0, 힌트 `SSH_CONNECTION`)일 때만** 사용자에게 `! node login.js` 핸드오프. 위 §"콜드스타트 검증 범위"의 AUTH 마찰 경로 서술(L97)도 이 기준으로 읽을 것.
