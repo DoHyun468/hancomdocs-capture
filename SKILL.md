@@ -39,8 +39,8 @@ doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금�
 | `READY` (exit 0) | 다 준비됨 | 바로 캡처(아래 "명령")로 진행 |
 | `DEPS_MISSING` (10) | 의존성 없음 | **에이전트가** `npm install` → `npx playwright install chromium` (수백 MB·1~2분, "최초 1회 설치 중" 안내) |
 | `CHROMIUM_MISSING` (11) | chromium만 없음 | **에이전트가** `npx playwright install chromium` |
-| `AUTH_MISSING` (12) | 로그인 세션 없음 | **사용자에게** 안내 (아래 ↓). **login.js를 네가 실행하지 마라.** |
-| `AUTH_EXPIRED` (4) | 세션 만료 (`--deep`에서만) | AUTH_MISSING과 동일 — **사용자에게** 재로그인 안내 |
+| `AUTH_MISSING` (12) | 로그인 세션 없음 | **에이전트가** `node login.js` 실행(창 띄움). 단 창이 사용자에게 안 보이는 원격/SSH면 사용자에게 넘겨라 (아래 ↓) |
+| `AUTH_EXPIRED` (4) | 세션 만료 (`--deep`에서만) | AUTH_MISSING과 동일 |
 
 조치를 한 뒤에는 **`node doctor.js`를 다시 돌려 `READY`(exit 0)가 될 때까지 반복**한다. READY가 아니면 캡처를 시도하지 마라.
 
@@ -48,17 +48,17 @@ doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금�
 
 > **node 가 PATH에 없을 때**: doctor 출력의 `node.path`(예: `C:\Program Files\nodejs\node.exe`)를 그대로 써서 이후 명령을 절대경로로 실행하면 된다. OS 분기 불필요.
 
-### AUTH_MISSING — 로그인 (사용자가 직접, 1회)
-로그인은 사람만 할 수 있고(OAuth), **창이 사용자 화면에 보여야** 한다. 에이전트가 `node login.js`를 실행하면 Windows에선 에이전트 세션에 창이 떠 **사용자에게 안 보인다**. 그러니 사용자에게 이렇게 안내한다:
+### AUTH_MISSING / AUTH_EXPIRED — 로그인 (1회)
+로그인은 사람만 할 수 있고(OAuth) **창이 화면에 보여야** 한다. **기본은 에이전트가 직접 `node login.js`를 실행해 창을 띄우는 것** — 보통 사용자의 데스크톱(콘솔/원격데스크톱 등)에서 도니 창이 바로 보인다. 뜬 창에서 사용자가 **한컴독스에 로그인**(평소 쓰는 방식대로)하면 login.js가 자동 감지해 `auth.json`을 저장하고 종료한다(최대 5분, 창 닫을 필요 없음). 끝나면 `node doctor.js`로 `READY` 확인 후 캡처로 진행.
 
-> "한컴독스 로그인이 1회 필요해요. **당신 세션에서 직접** 아래를 실행해 주세요(`!` 로 시작하면 이 세션에서 실행돼 결과가 여기로 들어와요):
-> `! node login.js`
-> 뜨는 창에서 **한컴독스에 로그인**만 하세요(카카오 등 평소대로). 홈 화면이 뜨면 세션이 자동 저장됩니다 — 창 닫을 필요 없어요."
+> **예외 — 네가 창을 보여줄 수 없는 환경이면 사용자에게 넘겨라.** 네가 SSH/원격 비대화형 셸이면(대표적으로 Windows OpenSSH = Session 0, 보이는 데스크톱이 없음 — 힌트: 환경변수 `SSH_CONNECTION` 존재) 띄운 창이 사용자 화면에 **안 보인다**. 이때만 직접 실행하지 말고 이렇게 부탁한다:
+> "한컴독스 로그인이 1회 필요해요. **당신 세션에서 직접** `! node login.js` 를 실행하고(`!`로 시작하면 이 세션에서 실행돼 결과가 여기로 들어와요), 뜬 창에서 로그인만 해주세요."
+> 애매하면 일단 띄워 보고, 사용자가 "창이 안 보인다"고 하면 그때 위로 전환하면 된다.
 
-`login.js`는 로그인 완료를 자동 감지해 `auth.json`을 저장하고 종료한다(최대 5분 대기). 끝나면 `node doctor.js`로 `READY` 확인 후 캡처로 진행. **비밀번호는 어디에도 저장 안 한다** — 세션 토큰만 `auth.json`에.
+**비밀번호는 어디에도 저장 안 한다** — 세션 토큰만 `auth.json`에.
 
 ### 캡처 중 `{"status":"...AUTH_EXPIRED..."}` (exit 4) 가 나오면
-세션 만료다. 위 AUTH_MISSING과 동일하게 **사용자에게** `! node login.js` 재실행을 안내한 뒤 다시 시도.
+세션 만료다. 위 AUTH_MISSING/AUTH_EXPIRED 절차대로 재로그인(기본 에이전트가 `node login.js`, SSH면 사용자) 후 다시 시도.
 
 > `auth.json`은 현재 로그인 세션 그 자체라 민감. git에 올리지 말 것(이미 .gitignore됨). 머신마다 각자 1회 로그인이 필요(세션 공유 안 함).
 
