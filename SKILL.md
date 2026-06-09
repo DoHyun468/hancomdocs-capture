@@ -67,13 +67,15 @@ doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금�
 모든 명령은 `scripts/`에서 `node hancom.js <subcommand> ...`. 결과는 마지막 줄 `RESULT_JSON={...}`.
 
 ```
-node hancom.js capture --file <절대경로> [--page N] [--grid] [--scale N] [--out <png>]
+node hancom.js capture --file <절대경로> [--page N] [--grid] [--scale N] [--page-height N] [--out <png>]
 node hancom.js zoom    --name <문서이름>  --clip "x,y,w,h" [--page N] [--scale N] [--out <png>]
 node hancom.js around  --name <문서이름>  --text "<검색어>" [--zoom [--band N]] [--grid] [--out <png>]
 node hancom.js locate  --name <문서이름>  --clues "a,b,c" [--grid] [--out <png>]
 ```
 
-- **capture**: 파일을 (필요시) 업로드하고 N쪽(기본 1)을 **A4 한 장 깔끔히** 캡처(툴바·여백 없음, 잘림 없음). 반환 `{shot, docName, page, estTotalPages, pageWidth, pageHeight}`.
+- **capture**: 파일을 (필요시) 업로드하고 N쪽(기본 1)을 **A4 한 장 깔끔히** 캡처(툴바·여백 없음, 잘림 없음). 반환 `{shot, docName, page, totalPages, actualPage, estTotalPages, pageWidth, pageHeight}`.
+  - **`totalPages`**: 상태바에서 읽은 **정확한 총 쪽수**(페이지1에서도 나옴). 못 읽으면 `null`이고 `estTotalPages`가 스크롤 기반 추정으로 폴백.
+  - **`actualPage`**: 상태바가 보는 **실제 현재 쪽**. 요청 `page`와 **다르면** 페이지 점프가 어긋난 것 — 그 문서는 페이지 높이가 기본(A4 100%)과 달라서다. **`--page-height N`**(쪽당 스크롤 px)으로 보정해 다시 캡처하면 맞는다. (가로/혼합 방향·비표준 크기 문서용 탈출구.)
 - **zoom**: 이미 올라간 문서의 특정 영역 확대. 좌표는 **페이지 왼쪽위=(0,0)** 기준 CSS px. 기본 scale 3.
 - **around**: 한컴독스 "찾기"로 텍스트를 찾아 **그 매치가 있는 페이지**를 캡처(정확). 검색칸에만 입력해 문서는 편집 안 됨.
   - **`--zoom`**: 페이지 전체 대신 **매치 줄을 그 자리에서 확대**해 잘라낸다(가로 밴드, 기본 높이 180px·`--band`로 조절, 기본 scale 2.5). **격자 읽기·좌표 입력 없이** "이 텍스트를 가까이 보여줘"가 한 번에 됨.
