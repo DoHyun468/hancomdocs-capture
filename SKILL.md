@@ -12,6 +12,15 @@ Playwright headless로 동작 — **보이는 창 없음**, 물리 마우스/키
 
 > 이건 "**렌더 결과를 눈으로 보고 싶다**"는 도구. hwp **내용 읽기/편집**은 `claw-hwp:hwp` 스킬을 써라.
 
+## 🚫 병렬 실행 절대 금지 — 동시 로그인 = 계정 잠금
+
+**같은 한컴 계정으로 브라우저 명령(capture·zoom·around·locate)을 동시에 두 개 이상 돌리면 안 된다.** 한컴독스는 동일 계정 동시 다중 로그인을 보안 위반으로 보고 **모든 세션을 로그아웃시키고 재로그인을 차단** → **비밀번호를 바꿔야 복구**된다. 보기 전용 캡처라도 로그인을 하므로 겹치면 잠긴다. **항상 순차 실행**.
+
+이를 강제하려고 **세션 락이 자동으로 걸린다**(별도 조작 불필요):
+- 브라우저 명령을 시작하면 락 파일(`<os.tmpdir>/hancom-session.lock`)을 잡고, 끝나면 푼다. 이미 활성 세션이 있으면 새 명령은 **즉시 거부**(`{"status":"session_busy",...}`, exit 7) — 브라우저를 안 띄우니 이중 로그인이 원천 차단된다.
+- 락은 **머신 공유 경로**라 같은 계정으로 로그인하는 **다른 도구·다른 repo**(예: 편집 플러그인 `claw-hancomdocs`)와도 공유돼 **캡처↔편집 충돌까지** 막는다. (프로세스가 죽었거나 20분 넘게 묵은 락은 stale 로 자동 회수.)
+- 캡처/편집 전에 다른 백그라운드가 쓰고 있는지 확인하려면: `node hancom.js session-status` (active:false 면 안전). `session_busy` 로 거부당하면 **재시도하지 말고** 그 세션이 끝난 뒤 다시 시도한다.
+
 ## ⚙️ 첫 실행 — 무조건 `doctor.js` 부터 (매 캡처 전 1회)
 
 캡처/줌/검색을 돌리기 전에 **항상 먼저** 자가진단을 돌린다. 무엇이 준비됐고 다음에 뭘 할지 doctor가 한 번에 알려준다 — 너는 직접 점검하지 말고 doctor가 시키는 대로만 하면 된다.
@@ -67,11 +76,15 @@ doctor는 node(풀경로)·playwright·chromium·auth.json·프로파일잠금�
 모든 명령은 `scripts/`에서 `node hancom.js <subcommand> ...`. 결과는 마지막 줄 `RESULT_JSON={...}`.
 
 ```
-node hancom.js capture --file <절대경로> [--page N] [--grid] [--scale N] [--page-height N] [--out <png>]
+node hancom.js capture (--file <절대경로> | --name <드라이브문서>) [--page N] [--grid] [--scale N] [--page-height N] [--out <png>]
 node hancom.js zoom    --name <문서이름>  --clip "x,y,w,h" [--page N] [--scale N] [--out <png>]
 node hancom.js around  --name <문서이름>  --text "<검색어>" [--zoom [--band N]] [--grid] [--out <png>]
 node hancom.js locate  --name <문서이름>  --clues "a,b,c" [--grid] [--out <png>]
+node hancom.js session-status               # 다른 한컴 세션이 활성인지 확인(병렬 금지 — 동시 로그인=계정 잠금)
 ```
+
+> **`capture --name`**: 이미 드라이브에 있는 문서는 로컬 파일 없이 이름만으로 바로 캡처(업로드 안 함). 로컬 파일을 올려 캡처하려면 `--file`.
+> 큰 캡처(고배율 zoom/넓은 band 등)는 긴 변이 ~1900px를 넘으면 **자동 축소**된다(비율 유지). 줄어든 경우 결과에 `imgPx`·`downscaledFrom` 표기.
 
 - **capture**: 파일을 (필요시) 업로드하고 N쪽(기본 1)을 **A4 한 장 깔끔히** 캡처(툴바·여백 없음, 잘림 없음). 반환 `{shot, docName, page, totalPages, estTotalPages, pageWidth, pageHeight}`.
   - **`totalPages`**: 상태바에서 읽은 **정확한 총 쪽수**(페이지1에서도 나옴). 못 읽으면 `null`이고 `estTotalPages`가 스크롤 기반 추정으로 폴백.

@@ -8,6 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const DIR = __dirname;
 const AUTH = path.join(DIR, 'auth.json');
@@ -20,6 +21,89 @@ const PAGE_H = 1143; // 100% 줌·A4 기준 페이지당 스크롤 높이(px), �
 // 브라우저 표시 모드 — 기본은 headless(창 없음). --headed면 창을 띄워 동작을 눈으로 볼 수 있다(디버그용).
 // (OS 분기 아님 — 런타임 옵션. headed일 때만 slowMo로 동작을 천천히 보여줌.)
 let HEADED = false, SLOWMO = 0;
+
+// ── 세션 락(병렬 실행 차단) ───────────────────────────────────────────────
+// ⚠️ 한컴독스는 같은 계정 동시 다중 로그인을 보안 위반으로 보고 전 세션 로그아웃 + 재로그인 차단
+// → 비밀번호를 바꿔야 복구된다. 브라우저를 띄우는 모든 명령은 로그인을 하므로, 두 개가 겹치면 잠긴다.
+// 그래서 브라우저 명령 시작 시 락 파일을 배타적으로 잡고(이미 활성 세션이 있으면 거부), 끝나면 푼다.
+// 락 경로는 머신 공유 절대경로(os.tmpdir)다 — 이렇게 해야 *다른 repo의 도구*(편집 플러그인
+// claw-hancomdocs 등)와도 같은 락을 보고 캡처↔편집 동시 로그인까지 막는다. 같은 계정으로 로그인하는
+// 모든 한컴 자동화가 이 경로를 공유. ⚠️ 연동 도구는 반드시 '동일한' 경로 문자열을 써야 함:
+//   const SESSION_LOCK = path.join(os.tmpdir(), 'hancom-session.lock')
+const SESSION_LOCK = path.join(os.tmpdir(), 'hancom-session.lock');
+const LOCK_STALE_MS = 20 * 60 * 1000; // 긴 작업 여유 — 이보다 오래되고 PID도 죽었으면 stale 로 회수
+let HELD_LOCK = false;
+
+function pidAlive(pid) {
+  if (!pid || pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } // EPERM=존재하나 권한없음→살아있음
+}
+function readLock() { try { return JSON.parse(fs.readFileSync(SESSION_LOCK, 'utf8')); } catch { return null; } }
+function lockIsActive(l) { return !!l && pidAlive(l.pid) && (Date.now() - (l.ts || 0)) < LOCK_STALE_MS; }
+
+// 활성이면 거부(process.exit(7)). stale(죽었거나 오래됨)면 회수 후 획득. 원자적 'wx' 생성으로 TOCTOU 최소화.
+function acquireSessionLock(cmd) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const fd = fs.openSync(SESSION_LOCK, 'wx'); // 배타적 생성 — 이미 있으면 EEXIST
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, cmd, startedAt: new Date().toISOString(), ts: Date.now(), host: os.hostname() }));
+      fs.closeSync(fd);
+      HELD_LOCK = true;
+      process.on('exit', releaseSessionLock);
+      process.on('SIGINT', () => process.exit(130));
+      process.on('SIGTERM', () => process.exit(143));
+      return;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const l = readLock();
+      if (lockIsActive(l)) {
+        out({ status: 'session_busy', heldBy: { pid: l.pid, cmd: l.cmd, startedAt: l.startedAt, ageMin: Math.round((Date.now() - (l.ts || 0)) / 60000), host: l.host },
+              reason: '다른 한컴 세션이 사용 중입니다(headless 백그라운드 활성). 병렬 실행은 동시 로그인→전 세션 로그아웃→재로그인 차단(비번 변경 필요) 위험이라 막습니다. 그 작업이 끝난 뒤 재시도하세요. (상태 확인: node hancom.js session-status)' });
+        process.exit(7);
+      }
+      try { fs.unlinkSync(SESSION_LOCK); } catch {} // stale → 회수 후 재시도
+    }
+  }
+  out({ status: 'session_lock_failed', reason: '세션 락 획득 실패(경합 지속). 잠시 뒤 재시도.' });
+  process.exit(7);
+}
+function releaseSessionLock() {
+  if (!HELD_LOCK) return;
+  const cur = readLock();
+  if (cur && cur.pid === process.pid) { try { fs.unlinkSync(SESSION_LOCK); } catch {} }
+  HELD_LOCK = false;
+}
+// 읽기 전용: 지금 활성 한컴 세션이 있는지 확인(아무것도 실행 안 함). 새 세션이 캡처/편집 전에 '인지'하는 용도.
+function cmdSessionStatus() {
+  const l = readLock();
+  if (!l) { out({ cmd: 'session-status', active: false, note: '활성 한컴 세션 없음 — 지금 실행해도 안전.' }); return; }
+  const alive = pidAlive(l.pid), ageMin = Math.round((Date.now() - (l.ts || 0)) / 60000), active = lockIsActive(l);
+  out({ cmd: 'session-status', active, heldBy: { pid: l.pid, cmd: l.cmd, startedAt: l.startedAt, ageMin, host: l.host }, alive,
+        note: active ? '다른 세션이 사용 중 — 병렬 실행 금지(끝난 뒤 재시도). 동시 로그인 시 계정 잠금 위험.' : '락 파일이 남아있으나 프로세스가 죽었거나 오래됨(stale) — 다음 브라우저 명령이 자동 회수.' });
+}
+// ──────────────────────────────────────────────────────────────────────────
+
+// 캡처가 비전 한계(대략 2000px)를 넘으면 긴 변을 SHOT_MAXPX 이하로 '넘칠 때만' 줄인다
+// (축소 전용·비율 유지·가능한 최대 크기로 디테일 보존). PNG 헤더로 크기 읽고 canvas 로 리샘플.
+const SHOT_MAXPX = 1900;
+async function clampImage(ed, filePath, maxPx = SHOT_MAXPX) {
+  let buf; try { buf = fs.readFileSync(filePath); } catch (e) { return null; }
+  if (buf.length < 24 || buf.toString('ascii', 12, 16) !== 'IHDR') return null;
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  if (Math.max(w, h) <= maxPx) return { w, h, scaled: false };
+  const ratio = maxPx / Math.max(w, h), nw = Math.round(w * ratio), nh = Math.round(h * ratio);
+  try {
+    const dataUrl = await ed.evaluate(async (a) => {
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'data:image/png;base64,' + a.b64; });
+      const c = document.createElement('canvas'); c.width = a.nw; c.height = a.nh;
+      c.getContext('2d').drawImage(img, 0, 0, a.nw, a.nh);
+      return c.toDataURL('image/png');
+    }, { b64: buf.toString('base64'), nw, nh });
+    fs.writeFileSync(filePath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+    return { w: nw, h: nh, scaled: true, from: { w, h } };
+  } catch (e) { return { w, h, scaled: false }; }
+}
 
 function parseArgs(argv) {
   const a = { _: argv[0] };
@@ -76,12 +160,23 @@ async function gotoPage(ed, n, pageH = PAGE_H) {
 // webhwp 상태바의 '현재 / 총' 쪽수 표시를 읽는다 → 추정(scrollHeight/PAGE_H) 대신 정확값.
 // 페이지1에서도 읽히고 off-by-one이 없다. 표시가 없으면(UI 변경 등) null → 호출부가 추정으로 폴백.
 async function readPageCount(ed) {
+  // 상태바 'x / Y쪽'을 읽는다. 특정 셀렉터 하나만 보면 일부 문서에서 stale 1/1 을 잡아(생성 HWPX 등)
+  // 총쪽수를 1로 오판한다 → 가시 요소 전체에서 'current/total' 후보를 긁어 total 최대값을 채택.
   try {
     return await ed.evaluate(() => {
-      const el = document.querySelector('.status_page .section.text_wrap.fit_size')
-              || document.querySelector('#status_bar .section.text_wrap.fit_size');
-      const m = el && (el.textContent || '').match(/(\d{1,5})\s*\/\s*(\d{1,5})/);
-      return m ? { current: Number(m[1]), total: Number(m[2]) } : null;
+      const candidates = [];
+      for (const el of document.querySelectorAll('*')) {
+        if (el.offsetParent === null) continue;
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!t || t.length > 80) continue;
+        const m = t.match(/(\d{1,5})\s*\/\s*(\d{1,5})(?:\s*쪽)?/);
+        if (!m) continue;
+        const current = Number(m[1]), total = Number(m[2]);
+        if (current > 0 && total > 0 && current <= total) candidates.push({ current, total });
+      }
+      if (!candidates.length) return null;
+      candidates.sort((a, b) => (b.total - a.total) || (b.current - a.current));
+      return candidates[0];
     });
   } catch { return null; }
 }
@@ -223,11 +318,20 @@ async function openDoc(ctx, page, name) {
   // 이름으로 행을 클릭해 열기 때문에, 다중 세션 파이프라인에서 동시 업로드가 끝나며 다른 행이
   // 열리는 race / 동명 파일 등으로 "요청한 그 파일이 아닌" 문서가 열릴 수 있다. docId 를 1차 신원으로
   // 붙여두고(__docId), 제목으로 교차 확인해 불일치면 즉시 중단한다(잘못된 문서를 캡처/검증하는 사고 차단).
-  const ident = await editor.evaluate(() => ({ url: location.href, title: document.title || '' }));
-  const docId = (String(ident.url).match(/[?&]docId=([^&#]+)/) || [])[1] || null;
-  const title = String(ident.title).normalize('NFC');
+  // 제목은 캔버스 렌더 직후에도 잠깐 "불러오는 중..." placeholder 라 너무 일찍 읽으면 오탐(WRONG_DOC).
+  // 제목이 안정될 때까지(placeholder 탈출 or stem 포함) 잠깐 폴링한 뒤 교차 확인. 끝까지 placeholder 면
+  // docId 를 1차 신원으로 신뢰하고 진행(제목만 보고 오중단 금지).
   const stem = name.replace(/\.[^.]+$/, '');
-  if (title && stem && !title.includes(stem)) throw new WrongDocError(name, title, docId);
+  const isPlaceholder = (t) => !t || /^불러오는\s*중/.test(t) || /^불러오는/.test(t);
+  let url = '', title = '';
+  for (let i = 0; i < 16; i++) {
+    const ident = await editor.evaluate(() => ({ url: location.href, title: document.title || '' })).catch(() => ({ url: '', title: '' }));
+    url = ident.url; title = String(ident.title).normalize('NFC');
+    if (!isPlaceholder(title) || (stem && title.includes(stem))) break;
+    await editor.waitForTimeout(300);
+  }
+  const docId = (String(url).match(/[?&]docId=([^&#]+)/) || [])[1] || null;
+  if (title && !isPlaceholder(title) && stem && !title.includes(stem)) throw new WrongDocError(name, title, docId);
   editor.__docId = docId; // 호출부가 결과(out)에 실어 보내 검증·로깅에 쓴다
   // 진입 presence(파란 물방울)는 대기로 빼지 않고, 스크린샷 직전 hideOverlays 에서
   // '오버레이 캔버스 숨김'으로 즉시 제거한다(대기 0초).
@@ -276,13 +380,16 @@ async function withEditor(scale, fn) {
 }
 
 async function cmdCapture(args) {
-  if (!args.file) throw new Error('--file 필요');
+  if (!args.file && !(args.name && args.name !== true)) throw new Error('--file <로컬경로> 또는 --name <드라이브 문서> 필요');
   const scale = Number(args.scale) || 1.5;
-  const name = path.basename(args.file).normalize('NFC'); // 출력 docName도 NFC로(후속 --name 일치)
+  // --name: 드라이브 문서 직접 캡처(로컬 파일 불필요, 업로드 안 함). --file: 파일명으로 드라이브 확인 후 없으면 업로드.
+  const byName = !!(args.name && args.name !== true);
+  const name = (byName ? String(args.name) : path.basename(args.file)).normalize('NFC');
   fs.mkdirSync(CAPDIR, { recursive: true });
   await withEditor(scale, async (ctx, page) => {
     let editor = await openDoc(ctx, page, name);
     if (!editor) {
+      if (byName) throw new Error('드라이브에서 문서 못 찾음: ' + name + ' (--name 은 업로드 안 함 — 로컬에서 올리려면 --file)');
       log('드라이브에 없음 → 업로드:', name);
       await uploadFile(page, args.file);
       editor = await openDoc(ctx, page, name);
@@ -302,6 +409,7 @@ async function cmdCapture(args) {
     const suffix = args.grid ? 'grid' : 'full';
     const shot = args.out || path.join(CAPDIR, `${name.replace(/\.[^.]+$/, '')}_${pTag}${suffix}_${stamp()}.png`);
     await editor.screenshot({ path: shot, clip: rect });
+    const cl = await clampImage(editor, shot); // 비전 한계 넘으면 자동 축소(가능한 최대 크기로)
     // 총 쪽수는 상태바 표시(정확) 우선, 없으면 스크롤 추정 폴백.
     // (상태바의 '현재 쪽'은 캐럿 기준이라 — 스크롤만 하면 page1 고정 — 캡처한 쪽과 무관해서 노출하지 않음.
     //  페이지 점프는 페이지 높이 균일(A4 100%) 가정. 비표준 문서는 --page-height로 보정.)
@@ -309,7 +417,8 @@ async function cmdCapture(args) {
     out({ cmd: 'capture', shot, docName: name, docId: editor.__docId || null, page: n,
           totalPages: pc ? pc.total : null,
           estTotalPages: pc ? pc.total : pageInfo.estTotal,
-          pageWidth: rect.width, pageHeight: rect.height, scale, grid: !!args.grid });
+          pageWidth: rect.width, pageHeight: rect.height, scale, grid: !!args.grid,
+          ...(cl && cl.scaled ? { imgPx: [cl.w, cl.h], downscaledFrom: [cl.from.w, cl.from.h] } : (cl ? { imgPx: [cl.w, cl.h] } : {})) });
   });
 }
 
@@ -336,14 +445,28 @@ async function cmdZoom(args) {
     };
     const shot = args.out || path.join(CAPDIR, `${String(args.name).replace(/\.[^.]+$/, '')}_p${n}_zoom_${stamp()}.png`);
     await editor.screenshot({ path: shot, clip });
-    out({ cmd: 'zoom', shot, docName: args.name, docId: editor.__docId || null, page: n, clipLocal: { x: lx, y: ly, width: w, height: h }, scale });
+    const cl = await clampImage(editor, shot);
+    out({ cmd: 'zoom', shot, docName: args.name, docId: editor.__docId || null, page: n, clipLocal: { x: lx, y: ly, width: w, height: h }, scale, ...(cl && cl.scaled ? { imgPx: [cl.w, cl.h], downscaledFrom: [cl.from.w, cl.from.h] } : (cl ? { imgPx: [cl.w, cl.h] } : {})) });
   });
 }
 
 // 찾기 다이얼로그 열기 — 툴바 '찾기' 버튼을 DOM 셀렉터(title)로, 드롭다운의 '찾기...' 항목은
 // 실제 위치를 DOM에서 읽어 클릭. (기존 하드코딩 좌표 click(309,95)/(335,167)는 창크기·UI버전·
 // 배율에 따라 어긋나 다이얼로그가 안 열려 실패 → 셀렉터/DOM-위치로 견고화. OS 무관.)
+// 찾기 검색칸(다이얼로그 중앙쯤의 보이는 넓은 input) 위치. 떠 있으면 좌표, 없으면 null.
+async function findSearchInputBox(ed) {
+  return await ed.evaluate(() => {
+    const ins = Array.from(document.querySelectorAll('input')).map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, vis: r.width > 60 && r.height > 10 && getComputedStyle(el).visibility !== 'hidden' && el.getAttribute('aria-label') !== '문서 편집 영역' }; });
+    const cand = ins.filter((i) => i.vis && i.y > 300).sort((a, b) => b.w - a.w)[0];
+    return cand ? { x: Math.round(cand.x), y: Math.round(cand.y), w: Math.round(cand.w), h: Math.round(cand.h) } : null;
+  });
+}
+
 async function openFindDialog(ed) {
+  // 단축키 우선: ControlOrMeta+F 로 찾기칸이 뜨면 메뉴 탐색을 건너뛴다. 안 뜨면(webhwp 가 무시) 기존 메뉴로 폴백.
+  await ed.keyboard.press('ControlOrMeta+F').catch(() => {});
+  await ed.waitForTimeout(550);
+  if (await findSearchInputBox(ed)) return; // 실제로 떴을 때만 빠른경로 종료(블라인드 입력 안 함)
   await ed.locator('a[title="찾기"]').first().click(); // 메인 찾기 버튼(title 고정 = 좌표 무관)
   await ed.waitForTimeout(900);
   // 드롭다운에서 '보이는' 찾기... 메뉴 항목의 실제 중심좌표를 읽어 클릭(좌표 드리프트 무관).
@@ -366,30 +489,52 @@ async function openFindDialog(ed) {
 
 // 찾기 다이얼로그를 열고 text를 검색해 매치로 점프. 검색칸에만 입력(편집 사고 방지).
 // 반환: {found, scrollTop, page} | null
+// 찾기 다이얼로그에 '모두 찾았/찾을 수 없습니다' 류 끝/실패 메시지가 떴는지(=매치 0 판정).
+async function findEndMessage(ed) {
+  return await ed.evaluate(() => {
+    for (const el of document.querySelectorAll('div, span, p, label')) {
+      const t = (el.textContent || '').trim();
+      if (t && t.length < 60 && el.offsetParent !== null && el.childElementCount === 0 &&
+          /모두 찾았|찾을 수 없|찾지 못|없습니다|끝까지 찾/.test(t)) return t;
+    }
+    return null;
+  }).catch(() => null);
+}
+// 다이얼로그 내 버튼/탭을 라벨 텍스트로 찾아 중심좌표 반환(좌표 하드코딩 회피).
+async function dialogBtnXY(ed, label) {
+  return await ed.evaluate((lab) => {
+    for (const el of document.querySelectorAll('a, button, div, span')) {
+      const t = (el.textContent || '').trim();
+      if (t === lab && el.offsetParent !== null && el.childElementCount === 0) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 15 && r.height > 10) return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      }
+    }
+    return null;
+  }, label);
+}
+
 async function findText(ed, text) {
   await openFindDialog(ed);
-  // 새로 뜬 보이는 input = 검색칸
-  const box = await ed.evaluate(() => {
-    const ins = Array.from(document.querySelectorAll('input')).map(el => { const r = el.getBoundingClientRect(); return { el, x: r.x, y: r.y, w: r.width, h: r.height, vis: r.width > 60 && r.height > 10 && getComputedStyle(el).visibility !== 'hidden' && el.getAttribute('aria-label') !== '문서 편집 영역' }; });
-    // 다이얼로그 중앙쯤(세로 1/3~2/3)에 있는 가장 넓은 입력
-    const cand = ins.filter(i => i.vis && i.y > 300).sort((a, b) => b.w - a.w)[0];
-    return cand ? { x: Math.round(cand.x), y: Math.round(cand.y), w: Math.round(cand.w), h: Math.round(cand.h) } : null;
-  });
+  const box = await findSearchInputBox(ed); // 새로 뜬 보이는 input = 검색칸
   if (!box) throw new Error('검색칸 탐색 실패');
   await ed.mouse.click(box.x + Math.min(box.w / 2, 40), box.y + box.h / 2);
   await ed.keyboard.press('ControlOrMeta+A'); // 전체선택: Win/Linux→Ctrl+A, Mac→Cmd+A 자동 매핑(OS 무관)
   await ed.keyboard.type(text, { delay: 25 });
+  // 검색 방향 '문서 전체'(한 바퀴) — '아래로' 기본은 캐럿 뒤만 찾아, 문서 맨앞(표지/상단 표)의 매치를 놓친다.
+  const wholeDoc = await dialogBtnXY(ed, '문서 전체');
+  if (wholeDoc) { await ed.mouse.click(wholeDoc.x, wholeDoc.y); await ed.waitForTimeout(300); }
   // "다음 찾기" 버튼 ≈ 검색칸 오른쪽(+70, 같은 행)
   const nextBtn = { x: box.x + box.w + 70, y: box.y - 1 };
   await ed.mouse.click(nextBtn.x, nextBtn.y); await ed.waitForTimeout(1600);
-  // 찾기 직후 캐럿이 매치로 이동 → 상태바 '현재 쪽'이 매치의 실제 페이지(정확)
-  const page = await readCurrentPage(ed);
-  // 캐럿(매치) 뷰포트 픽셀 위치 = '텍스트 위치로 바로 확대'의 앵커. 닫기 전에 읽어둔다.
-  const caret = await readCaretRect(ed);
+  // no-match: '찾을 수 없습니다' 류 메시지가 뜨면 매치 0. DOM 텍스트로 감지(문서 맨앞 매치를 '안 움직였다'고 오판하던 버그 제거).
+  const noMatch = await findEndMessage(ed);
+  const page = noMatch ? null : await readCurrentPage(ed);  // 찾기 직후 캐럿이 매치로 이동 → 상태바 '현재 쪽'=매치 페이지
+  const caret = noMatch ? null : await readCaretRect(ed);    // 캐럿(매치) 뷰포트 픽셀 = '바로 확대' 앵커. 닫기 전에 읽어둠.
   await ed.mouse.click(nextBtn.x, nextBtn.y + 53); await ed.waitForTimeout(700); // 닫기
   await ed.keyboard.press('Escape'); await ed.waitForTimeout(400); // 검색 하이라이트 제거(혼동 방지)
-  // 새 세션이라 캐럿이 1쪽에서 시작 → 매치가 2쪽 이상이면 page>1. (1쪽 매치/미발견 구분은 한계)
-  return page && page > 0 ? { found: true, page, caret } : { found: false };
+  if (noMatch || !page || page <= 0) return { found: false };
+  return { found: true, page, caret };
 }
 
 // 찾기 직후 캐럿(매치 위치) 요소의 뷰포트 사각형. webhwp 는 캐럿을 DOM 요소로 그린다.
@@ -451,7 +596,8 @@ async function cmdAround(args) {
       };
       const shot = args.out || path.join(CAPDIR, `${String(args.name).replace(/\.[^.]+$/, '')}_findzoom_${stamp()}.png`);
       await editor.screenshot({ path: shot, clip });
-      out({ cmd: 'around', found: true, zoom: true, text: args.text, docId: editor.__docId || null, page: r.page, shot, pageWidth: rect.width, band, scale });
+      const cl = await clampImage(editor, shot); // 밴드가 넓으면(페이지폭×고배율) 한계 초과 → 자동 축소
+      out({ cmd: 'around', found: true, zoom: true, text: args.text, docId: editor.__docId || null, page: r.page, shot, pageWidth: rect.width, band, scale, ...(cl && cl.scaled ? { imgPx: [cl.w, cl.h], downscaledFrom: [cl.from.w, cl.from.h] } : (cl ? { imgPx: [cl.w, cl.h] } : {})) });
       return;
     }
 
@@ -463,7 +609,8 @@ async function cmdAround(args) {
     if (args.grid) await injectGrid(editor, rect);
     const shot = args.out || path.join(CAPDIR, `${String(args.name).replace(/\.[^.]+$/, '')}_find_${stamp()}.png`);
     await editor.screenshot({ path: shot, clip: rect });
-    out({ cmd: 'around', found: true, text: args.text, docId: editor.__docId || null, page: r.page, shot, pageWidth: rect.width, pageHeight: rect.height, scale, grid: !!args.grid });
+    const cl = await clampImage(editor, shot);
+    out({ cmd: 'around', found: true, text: args.text, docId: editor.__docId || null, page: r.page, shot, pageWidth: rect.width, pageHeight: rect.height, scale, grid: !!args.grid, ...(cl && cl.scaled ? { imgPx: [cl.w, cl.h], downscaledFrom: [cl.from.w, cl.from.h] } : (cl ? { imgPx: [cl.w, cl.h] } : {})) });
   });
 }
 
@@ -518,11 +665,14 @@ async function cmdLocate(args) {
   HEADED = !!args.headed;                                    // --headed: 창 띄워 보기(디버그)
   SLOWMO = args.slowmo ? Number(args.slowmo) : (HEADED ? 400 : 0); // headed면 동작을 천천히
   try {
-    if (args._ === 'capture') await cmdCapture(args);
+    // 브라우저(=로그인)를 쓰는 명령은 세션 락을 잡아 병렬 로그인(→계정 잠금)을 차단. session-status 는 면제(읽기전용).
+    if (['capture', 'zoom', 'around', 'locate'].includes(args._)) acquireSessionLock(args._);
+    if (args._ === 'session-status') cmdSessionStatus();
+    else if (args._ === 'capture') await cmdCapture(args);
     else if (args._ === 'zoom') await cmdZoom(args);
     else if (args._ === 'around') await cmdAround(args);
     else if (args._ === 'locate') await cmdLocate(args);
-    else { log('사용법: capture --file <경로> [--page N] [--grid] | zoom --name <이름> --clip "x,y,w,h" [--page N] | around --name <이름> --text "<검색어>" [--grid] | locate --name <이름> --clues "a,b,c" [--grid]'); process.exit(2); }
+    else { log('사용법: capture (--file <경로> | --name <드라이브문서>) [--page N] [--grid] | zoom --name <이름> --clip "x,y,w,h" [--page N] | around --name <이름> --text "<검색어>" [--zoom] [--grid] | locate --name <이름> --clues "a,b,c" [--grid] | session-status'); process.exit(2); }
     process.exit(0);
   } catch (e) {
     if (e instanceof CannotOpenError || e.message === 'CANNOT_OPEN') {
