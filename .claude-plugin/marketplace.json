@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hancomdocs-capture",
+  "description": "Single-plugin marketplace shipping hancomdocs-capture — 한컴독스 (Hancom Docs) render capture / Tier-2 verification companion for claw-hwp.",
+  "owner": { "name": "DoHyun468", "url": "https://github.com/DoHyun468" },
+  "plugins": [
+    {
+      "name": "hancomdocs-capture",
+      "description": "Upload a .hwp/.hwpx to 한컴독스 and capture how it renders — Tier-2 compatibility check for claw-hwp edits. Headless, saved-login, no Hancom Office needed.",
+      "author": { "name": "DoHyun468" },
+      "category": "documents",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/DoHyun468/hancomdocs-capture.git",
+        "path": "plugins/hancomdocs-capture",
+        "ref": "main"
+      },
+      "homepage": "https://github.com/DoHyun468/hancomdocs-capture"
+    }
+  ]
+}

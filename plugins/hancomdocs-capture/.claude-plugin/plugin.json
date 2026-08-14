@@ -1,0 +1,9 @@
+{
+  "name": "hancomdocs-capture",
+  "description": "Upload a .hwp/.hwpx (or other office) file to 한컴독스 (Hancom Docs) and capture how it renders — full-page screenshots, zoomed regions, or find-by-text. Headless, reuses a saved login. The Tier-2 compatibility check companion for claw-hwp.",
+  "author": { "name": "DoHyun468", "url": "https://github.com/DoHyun468" },
+  "homepage": "https://github.com/DoHyun468/hancomdocs-capture",
+  "repository": "https://github.com/DoHyun468/hancomdocs-capture.git",
+  "license": "MIT",
+  "version": "0.1.0"
+}
